@@ -12,6 +12,7 @@ st.markdown("""
 - 파일별로 **플랫폼 자동 판별**
 - **헤더(컬럼명) 기반 자동 매핑**
 - 결과는 **한 개의 송장파일로 통합 변환**
+- ✅ 스마트스토어 품목명은 **Q열(상품명) + S열(옵션정보)** 결합
 """)
 
 # =========================
@@ -35,11 +36,10 @@ DEFAULT_TEMPLATE_COLUMNS = [
 ]
 
 def build_default_template_df() -> pd.DataFrame:
-    # 빈 템플릿(컬럼만 존재). 필요하면 기본값도 여기서 세팅 가능.
     return pd.DataFrame(columns=DEFAULT_TEMPLATE_COLUMNS)
 
 # -------------------------
-# 유틸: 컬럼명 정규화
+# 유틸: 컬럼명 정규화/검색
 # -------------------------
 def norm(s: str) -> str:
     if s is None:
@@ -69,7 +69,7 @@ def find_col(df: pd.DataFrame, candidates: list[str]):
     return None
 
 # -------------------------
-# 플랫폼 판별용 시그니처(헤더 키워드)
+# 플랫폼 판별
 # -------------------------
 PLATFORM_SIGNATURES = {
     "coupang": ["등록상품명", "수취인이름", "주문번호", "결제액", "구매수", "배송메시지", "배송메세지"],
@@ -100,13 +100,12 @@ def detect_platform(df: pd.DataFrame) -> str:
     return "coupang" if coupang_score >= smart_score else "smartstore"
 
 # -------------------------
-# 송장필드(템플릿 컬럼명)별 후보 헤더명(자동 매핑)
-# ※ 템플릿 컬럼명과 동일하게 맞춤!
+# 자동 매핑 후보(템플릿 컬럼명 기준)
 # -------------------------
 CANDIDATES = {
     "고객주문번호": {
         "coupang": ["주문번호", "고객주문번호", "order number", "orderno"],
-        "smartstore": ["주문번호", "상품주문번호", "상품 주문번호", "주문관리번호", "order no"],
+        "smartstore": ["주문번호", "주문관리번호", "order no"],
     },
     "품목명": {
         "coupang": ["등록상품명", "상품명", "옵션정보", "product name"],
@@ -126,7 +125,7 @@ CANDIDATES = {
     },
     "받는분전화번호": {
         "coupang": ["수취인연락처", "전화번호", "수취인전화번호", "휴대폰", "연락처"],
-        "smartstore": ["수취인연락처1", "수취인연락처", "수취인연락처(1)", "수취인 휴대전화", "수취인전화번호", "연락처"],
+        "smartstore": ["수취인연락처1", "수취인연락처(1)", "수취인 휴대전화", "수취인전화번호", "연락처"],
     },
     "받는분우편번호": {
         "coupang": ["우편번호", "수취인우편번호", "배송지우편번호", "zip", "postcode"],
@@ -152,11 +151,47 @@ def build_mapping(df: pd.DataFrame, platform: str):
         mapping[invoice_col] = col
     return mapping
 
-def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mapping: dict) -> pd.DataFrame:
+# -------------------------
+# ✅ 스마트스토어 품목명 결합 (Q열 + S열 옵션정보)
+# -------------------------
+def build_smartstore_item_name(order_df: pd.DataFrame) -> pd.Series:
+    """
+    스마트스토어 품목명 = Q열(상품명) + S열(옵션정보)
+    - 헤더 기반 우선 탐색
+    - 실패 시 열 위치 fallback: Q=iloc[16], S=iloc[18]
+    """
+    product_col = find_col(order_df, ["상품명", "주문상품명", "상품명(옵션포함)", "상품명/옵션"])
+    option_col = find_col(order_df, ["옵션정보", "옵션", "옵션명", "옵션내용"])
+
+    if product_col is not None:
+        product = order_df[product_col].astype(str).fillna("")
+    else:
+        product = order_df.iloc[:, 16].astype(str).fillna("") if order_df.shape[1] > 16 else pd.Series([""] * len(order_df))
+
+    if option_col is not None:
+        option = order_df[option_col].astype(str).fillna("")
+    else:
+        option = order_df.iloc[:, 18].astype(str).fillna("") if order_df.shape[1] > 18 else pd.Series([""] * len(order_df))
+
+    product = product.replace(["nan", "None"], "", regex=False).str.strip()
+    option = option.replace(["nan", "None"], "", regex=False).str.strip()
+
+    combined = (product + " " + option).str.replace(r"\s+", " ", regex=True).str.strip()
+    return combined
+
+def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mapping: dict, platform: str) -> pd.DataFrame:
+    """템플릿 컬럼 구조 그대로, 주문 행 수만큼 송장 행 생성"""
     out = pd.DataFrame({c: [""] * len(order_df) for c in template_columns})
+
+    # 기본 매핑
     for inv_col, ord_col in mapping.items():
         if inv_col in out.columns and ord_col is not None and ord_col in order_df.columns:
             out[inv_col] = order_df[ord_col]
+
+    # ✅ 스마트스토어 품목명은 결합 값으로 덮어쓰기
+    if platform == "smartstore" and "품목명" in out.columns:
+        out["품목명"] = build_smartstore_item_name(order_df)
+
     return out
 
 # =========================
@@ -197,7 +232,7 @@ if uploaded_files:
             platform = detect_platform(order_df)
             mapping = build_mapping(order_df, platform)
 
-            out_rows = make_invoice_rows(template_columns, order_df, mapping)
+            out_rows = make_invoice_rows(template_columns, order_df, mapping, platform)
             all_out_rows.append(out_rows)
 
             ok_cnt = sum(1 for v in mapping.values() if v is not None)
