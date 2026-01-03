@@ -12,7 +12,8 @@ st.markdown("""
 - 파일별로 **플랫폼 자동 판별**
 - **헤더(컬럼명) 기반 자동 매핑**
 - 결과는 **한 개의 송장파일로 통합 변환**
-- ✅ 스마트스토어 품목명은 **Q열(상품명) + S열(옵션정보)** 결합
+- ✅ 스마트스토어 품목명: **Q열(상품명) + S열(옵션정보)**
+- ✅ 쿠팡 품목명: **M열 노출상품명(옵션명)**
 """)
 
 # =========================
@@ -68,12 +69,20 @@ def find_col(df: pd.DataFrame, candidates: list[str]):
 
     return None
 
+def clean_series(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+        .fillna("")
+        .replace(["nan", "None"], "", regex=False)
+        .str.strip()
+    )
+
 # -------------------------
 # 플랫폼 판별
 # -------------------------
 PLATFORM_SIGNATURES = {
-    "coupang": ["등록상품명", "수취인이름", "주문번호", "결제액", "구매수", "배송메시지", "배송메세지"],
-    "smartstore": ["상품주문번호", "수취인명", "배송메시지", "배송메세지", "옵션정보", "주문번호", "우편번호"],
+    "coupang": ["노출상품명", "노출상품명(옵션명)", "등록상품명", "수취인이름", "주문번호", "결제액", "구매수"],
+    "smartstore": ["상품주문번호", "수취인명", "배송메시지", "배송메세지", "옵션정보", "우편번호"],
 }
 
 def detect_platform(df: pd.DataFrame) -> str:
@@ -105,35 +114,44 @@ def detect_platform(df: pd.DataFrame) -> str:
 CANDIDATES = {
     "고객주문번호": {
         "coupang": ["주문번호", "고객주문번호", "order number", "orderno"],
-        "smartstore": ["주문번호", "주문관리번호", "order no"],
+        "smartstore": ["상품주문번호", "상품 주문번호", "주문번호", "주문관리번호", "order no"],
     },
     "품목명": {
-        "coupang": ["등록상품명", "상품명", "옵션정보", "product name"],
-        "smartstore": ["상품명", "옵션정보", "상품명(옵션포함)", "상품명/옵션", "주문상품명"],
+        # 쿠팡 품목명은 최종적으로 "M열 노출상품명(옵션명)"으로 덮어쓰기 할 것이지만,
+        # 그래도 자동 매핑 후보는 넓게 둡니다.
+        "coupang": ["노출상품명(옵션명)", "노출상품명", "등록상품명", "상품명"],
+        "smartstore": ["상품명", "주문상품명", "옵션정보", "상품명(옵션포함)", "상품명/옵션"],
     },
     "기타1": {
         "coupang": ["결제액", "결제금액", "상품결제금액", "payment", "결제금"],
-        "smartstore": ["최종 상품별 총 주문금액"],
+        "smartstore": ["결제금액", "총결제금액", "상품주문금액", "판매금액", "결제 금액", "주문금액"],
     },
     "내품수량": {
         "coupang": ["구매수", "수량", "구매수량", "qty", "수량(개)"],
-        "smartstore": ["수량", "구매수량", "주문수량", "상품수량", "qty"],
+        "smartstore": ["수량", "주문수량", "구매수량", "상품수량", "qty"],
     },
     "받는분성명": {
         "coupang": ["수취인이름", "수취인", "받는분", "수령인", "recipient"],
-        "smartstore": ["수취인명", "수취인", "수령인", "받는사람", "받는분", "수취인 이름"],
+        "smartstore": ["수취인명", "수취인 이름", "수취인", "수령인", "받는사람", "받는분", "수하인명"],
     },
     "받는분전화번호": {
         "coupang": ["수취인연락처", "전화번호", "수취인전화번호", "휴대폰", "연락처"],
-        "smartstore": ["수취인연락처1", "수취인연락처(1)", "수취인 휴대전화", "수취인전화번호", "연락처"],
+        "smartstore": [
+            "수취인연락처1", "수취인연락처2", "수취인연락처", "수취인 휴대전화", "수취인휴대전화",
+            "수취인전화번호", "연락처", "휴대폰번호", "휴대전화"
+        ],
     },
     "받는분우편번호": {
         "coupang": ["우편번호", "수취인우편번호", "배송지우편번호", "zip", "postcode"],
-        "smartstore": ["우편번호", "수취인우편번호", "배송지우편번호", "수취인 우편번호"],
+        "smartstore": ["수취인우편번호", "우편번호", "배송지우편번호", "수취인 우편번호", "우편 번호"],
     },
     "받는분주소(전체,분할)": {
         "coupang": ["주소", "수취인주소", "배송지주소", "도로명주소", "받는분주소", "주소(전체,분할)"],
-        "smartstore": ["배송지", "배송지주소", "수취인주소", "기본주소", "도로명주소", "주소","통합배송지"],
+        "smartstore": [
+            "수취인주소", "배송지주소", "배송지", "주소",
+            "수취인기본주소", "수취인상세주소", "기본주소", "상세주소",
+            "도로명주소", "지번주소"
+        ],
     },
     "배송메세지1": {
         "coupang": ["배송메시지", "배송메세지", "요청사항", "배송요청사항", "message"],
@@ -164,23 +182,79 @@ def build_smartstore_item_name(order_df: pd.DataFrame) -> pd.Series:
     option_col = find_col(order_df, ["옵션정보", "옵션", "옵션명", "옵션내용"])
 
     if product_col is not None:
-        product = order_df[product_col].astype(str).fillna("")
+        product = clean_series(order_df[product_col])
     else:
-        product = order_df.iloc[:, 16].astype(str).fillna("") if order_df.shape[1] > 16 else pd.Series([""] * len(order_df))
+        product = clean_series(order_df.iloc[:, 16]) if order_df.shape[1] > 16 else pd.Series([""] * len(order_df))
 
     if option_col is not None:
-        option = order_df[option_col].astype(str).fillna("")
+        option = clean_series(order_df[option_col])
     else:
-        option = order_df.iloc[:, 18].astype(str).fillna("") if order_df.shape[1] > 18 else pd.Series([""] * len(order_df))
-
-    product = product.replace(["nan", "None"], "", regex=False).str.strip()
-    option = option.replace(["nan", "None"], "", regex=False).str.strip()
+        option = clean_series(order_df.iloc[:, 18]) if order_df.shape[1] > 18 else pd.Series([""] * len(order_df))
 
     combined = (product + " " + option).str.replace(r"\s+", " ", regex=True).str.strip()
     return combined
 
+# -------------------------
+# ✅ 쿠팡 품목명: M열 노출상품명(옵션명)
+# -------------------------
+def build_coupang_item_name(order_df: pd.DataFrame) -> pd.Series:
+    """
+    쿠팡 품목명 = M열 '노출상품명(옵션명)' 사용
+    - 헤더 기반 우선 탐색
+    - 실패 시 열 위치 fallback: M=iloc[12] (A=0 → M=12)
+    """
+    col = find_col(order_df, ["노출상품명(옵션명)", "노출상품명", "노출 상품명(옵션명)", "노출 상품명"])
+    if col is not None:
+        return clean_series(order_df[col])
+
+    # fallback: M열
+    if order_df.shape[1] > 12:
+        return clean_series(order_df.iloc[:, 12])
+
+    return pd.Series([""] * len(order_df))
+
+# -------------------------
+# 스마트스토어 받는사람 보강(전화/우편/주소)
+# -------------------------
+def build_smartstore_phone(order_df: pd.DataFrame) -> pd.Series:
+    c1 = find_col(order_df, ["수취인연락처1", "수취인연락처(1)", "수취인 휴대전화", "수취인휴대전화"])
+    c2 = find_col(order_df, ["수취인연락처2", "수취인연락처(2)"])
+    c  = find_col(order_df, ["수취인연락처", "수취인전화번호", "연락처", "휴대폰번호", "휴대전화"])
+
+    if c1 is not None:
+        return clean_series(order_df[c1])
+    if c2 is not None:
+        return clean_series(order_df[c2])
+    if c is not None:
+        return clean_series(order_df[c])
+    return pd.Series([""] * len(order_df))
+
+def build_smartstore_zip(order_df: pd.DataFrame) -> pd.Series:
+    z = find_col(order_df, ["수취인우편번호", "우편번호", "배송지우편번호", "우편 번호"])
+    if z is None:
+        return pd.Series([""] * len(order_df))
+    return clean_series(order_df[z])
+
+def build_smartstore_address(order_df: pd.DataFrame) -> pd.Series:
+    base = find_col(order_df, ["수취인기본주소", "기본주소", "도로명주소", "지번주소"])
+    detail = find_col(order_df, ["수취인상세주소", "상세주소", "상세 주소"])
+
+    if base is not None:
+        base_s = clean_series(order_df[base])
+        if detail is not None:
+            detail_s = clean_series(order_df[detail])
+            return (base_s + " " + detail_s).str.replace(r"\s+", " ", regex=True).str.strip()
+        return base_s
+
+    addr = find_col(order_df, ["수취인주소", "배송지주소", "배송지", "주소"])
+    if addr is None:
+        return pd.Series([""] * len(order_df))
+    return clean_series(order_df[addr])
+
+# -------------------------
+# 송장 행 생성
+# -------------------------
 def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mapping: dict, platform: str) -> pd.DataFrame:
-    """템플릿 컬럼 구조 그대로, 주문 행 수만큼 송장 행 생성"""
     out = pd.DataFrame({c: [""] * len(order_df) for c in template_columns})
 
     # 기본 매핑
@@ -188,9 +262,21 @@ def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mappi
         if inv_col in out.columns and ord_col is not None and ord_col in order_df.columns:
             out[inv_col] = order_df[ord_col]
 
-    # ✅ 스마트스토어 품목명은 결합 값으로 덮어쓰기
-    if platform == "smartstore" and "품목명" in out.columns:
-        out["품목명"] = build_smartstore_item_name(order_df)
+    # ✅ 플랫폼별 품목명 강제 규칙 적용
+    if "품목명" in out.columns:
+        if platform == "smartstore":
+            out["품목명"] = build_smartstore_item_name(order_df)
+        elif platform == "coupang":
+            out["품목명"] = build_coupang_item_name(order_df)
+
+    # ✅ 스마트스토어 받는사람 정보 강제 세팅(분리 컬럼 조합 포함)
+    if platform == "smartstore":
+        if "받는분전화번호" in out.columns:
+            out["받는분전화번호"] = build_smartstore_phone(order_df)
+        if "받는분우편번호" in out.columns:
+            out["받는분우편번호"] = build_smartstore_zip(order_df)
+        if "받는분주소(전체,분할)" in out.columns:
+            out["받는분주소(전체,분할)"] = build_smartstore_address(order_df)
 
     return out
 
@@ -239,7 +325,7 @@ if uploaded_files:
             report_rows.append({
                 "파일명": uf.name,
                 "자동판별 플랫폼": "쿠팡" if platform == "coupang" else ("스마트스토어" if platform == "smartstore" else "알수없음"),
-                "매핑 성공": f"{ok_cnt}/{len(mapping)}",
+                "매핑 성공(참고)": f"{ok_cnt}/{len(mapping)}",
                 "행(주문) 수": len(order_df),
             })
 
@@ -248,7 +334,6 @@ if uploaded_files:
         st.subheader("📌 파일별 자동 판별/변환 요약")
         st.dataframe(pd.DataFrame(report_rows), use_container_width=True)
 
-        # 엑셀을 메모리로 저장(서버/클라우드 배포에 유리)
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_filename = f"통합_송장파일_{now_str}.xlsx"
 
