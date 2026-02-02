@@ -114,9 +114,9 @@ def read_excel_safely(uploaded_file, platform_hint: str | None = None) -> pd.Dat
     if platform_hint == "smartstore":
         decrypted = decrypt_xlsx_if_needed(file_bytes, SMARTSTORE_PASSWORD)
         # ✅ 첫 번째 행 삭제 후 컬럼 매칭(2번째 행을 헤더로)
-        return pd.read_excel(decrypted, header=1)
+        return pd.read_excel(decrypted, header=1, dtype=str)
 
-    return pd.read_excel(BytesIO(file_bytes))
+    return pd.read_excel(BytesIO(file_bytes), dtype=str)
 
 # -------------------------
 # 플랫폼 판별
@@ -325,6 +325,14 @@ def build_thirtymall_item_name(order_df: pd.DataFrame) -> pd.Series:
     return dedupe_merge_text(s, v)
 
 # -------------------------
+# ✅ thirtymall(떠리몰) 주문번호: H열(8번째 컬럼) 강제
+# -------------------------
+def build_thirtymall_order_no(order_df: pd.DataFrame) -> pd.Series:
+    if order_df.shape[1] > 7:
+        return clean_series(order_df.iloc[:, 7])
+    return pd.Series([""] * len(order_df))
+
+# -------------------------
 # 스마트스토어 받는사람 보강(전화/우편/주소)
 # -------------------------
 def build_smartstore_phone(order_df: pd.DataFrame) -> pd.Series:
@@ -381,6 +389,10 @@ def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mappi
             out["품목명"] = build_coupang_item_name(order_df)
         elif platform == "thirtymall":
             out["품목명"] = build_thirtymall_item_name(order_df)
+
+    # 떠리몰 주문번호는 H열 강제 사용
+    if platform == "thirtymall" and "고객주문번호" in out.columns:
+        out["고객주문번호"] = build_thirtymall_order_no(order_df)
 
     # 스마트스토어 받는사람 정보 강제 세팅(분리 컬럼 조합 포함)
     if platform == "smartstore":
