@@ -8,12 +8,13 @@ st.set_page_config(page_title="주문파일 → 송장파일 변환", layout="ce
 st.title("📦 주문파일 → 송장 출력용 파일 변환기 (자동 플랫폼 판별 + 다중 업로드 통합)")
 
 st.markdown("""
-- 쿠팡/스마트스토어 주문 엑셀(xlsx) **여러 개를 한번에 업로드**
+- 쿠팡/스마트스토어/지마켓(Gmarket) 주문 엑셀(xlsx) **여러 개를 한번에 업로드**
 - 파일별로 **플랫폼 자동 판별**
 - **헤더(컬럼명) 기반 자동 매핑**
 - 결과는 **한 개의 송장파일로 통합 변환**
 - ✅ 스마트스토어 품목명: **Q열(상품명) + S열(옵션정보)**
 - ✅ 쿠팡 품목명: **M열 노출상품명(옵션명)**
+- ✅ 지마켓 품목명: **상품명 + 옵션/추가구성/사은품/덤**
 """)
 
 # =========================
@@ -83,6 +84,10 @@ def clean_series(s: pd.Series) -> pd.Series:
 PLATFORM_SIGNATURES = {
     "coupang": ["노출상품명", "노출상품명(옵션명)", "등록상품명", "수취인이름", "주문번호", "결제액", "구매수"],
     "smartstore": ["상품주문번호", "수취인명", "배송메시지", "배송메세지", "옵션정보", "우편번호"],
+    "gmarket": [
+        "판매아이디", "주문번호", "상품명", "수령인명", "수령인 휴대폰", "우편번호",
+        "주소", "배송시 요구사항", "발송마감일", "택배사명(발송방법)"
+    ],
 }
 
 def detect_platform(df: pd.DataFrame) -> str:
@@ -103,10 +108,23 @@ def detect_platform(df: pd.DataFrame) -> str:
 
     coupang_score = score(PLATFORM_SIGNATURES["coupang"])
     smart_score = score(PLATFORM_SIGNATURES["smartstore"])
+    gmarket_score = score(PLATFORM_SIGNATURES["gmarket"])
 
-    if coupang_score == 0 and smart_score == 0:
+    seller_col = find_col(df, ["판매아이디", "제휴사명", "판매채널", "쇼핑몰구분", "몰구분"])
+    if seller_col is not None:
+        vals = clean_series(df[seller_col]).str.lower()
+        if (
+            vals.str.contains("지마켓", na=False)
+            | vals.str.contains("gmarket", na=False)
+            | vals.str.contains("옥션", na=False)
+            | vals.str.contains("auction", na=False)
+        ).any():
+            gmarket_score += 3
+
+    if coupang_score == 0 and smart_score == 0 and gmarket_score == 0:
         return "unknown"
-    return "coupang" if coupang_score >= smart_score else "smartstore"
+    scores = {"coupang": coupang_score, "smartstore": smart_score, "gmarket": gmarket_score}
+    return max(scores, key=scores.get)
 
 # -------------------------
 # 자동 매핑 후보(템플릿 컬럼명 기준)
@@ -115,24 +133,29 @@ CANDIDATES = {
     "고객주문번호": {
         "coupang": ["주문번호", "고객주문번호", "order number", "orderno"],
         "smartstore": ["상품주문번호", "상품 주문번호", "주문번호", "주문관리번호", "order no"],
+        "gmarket": ["주문번호", "장바구니번호(결제번호)", "결제번호", "주문관리번호"],
     },
     "품목명": {
         # 쿠팡 품목명은 최종적으로 "M열 노출상품명(옵션명)"으로 덮어쓰기 할 것이지만,
         # 그래도 자동 매핑 후보는 넓게 둡니다.
         "coupang": ["노출상품명(옵션명)", "노출상품명", "등록상품명", "상품명"],
         "smartstore": ["상품명", "주문상품명", "옵션정보", "상품명(옵션포함)", "상품명/옵션"],
+        "gmarket": ["상품명", "옵션", "추가구성", "사은품", "덤"],
     },
     "기타1": {
         "coupang": ["결제액", "결제금액", "상품결제금액", "payment", "결제금"],
         "smartstore": ["결제금액", "총결제금액", "상품주문금액", "판매금액", "결제 금액", "주문금액"],
+        "gmarket": ["판매금액", "판매단가", "정산예정금액"],
     },
     "내품수량": {
         "coupang": ["구매수", "수량", "구매수량", "qty", "수량(개)"],
         "smartstore": ["수량", "주문수량", "구매수량", "상품수량", "qty"],
+        "gmarket": ["수량", "주문수량", "구매수량", "qty"],
     },
     "받는분성명": {
         "coupang": ["수취인이름", "수취인", "받는분", "수령인", "recipient"],
         "smartstore": ["수취인명", "수취인 이름", "수취인", "수령인", "받는사람", "받는분", "수하인명"],
+        "gmarket": ["수령인명", "수취인명", "수취인", "수령인", "받는분"],
     },
     "받는분전화번호": {
         "coupang": ["수취인연락처", "전화번호", "수취인전화번호", "휴대폰", "연락처"],
@@ -140,10 +163,12 @@ CANDIDATES = {
             "수취인연락처1", "수취인연락처2", "수취인연락처", "수취인 휴대전화", "수취인휴대전화",
             "수취인전화번호", "연락처", "휴대폰번호", "휴대전화"
         ],
+        "gmarket": ["수령인 휴대폰", "수령인 전화번호", "수령인연락처", "연락처", "휴대폰"],
     },
     "받는분우편번호": {
         "coupang": ["우편번호", "수취인우편번호", "배송지우편번호", "zip", "postcode"],
         "smartstore": ["수취인우편번호", "우편번호", "배송지우편번호", "수취인 우편번호", "우편 번호"],
+        "gmarket": ["우편번호", "배송지우편번호", "수취인우편번호"],
     },
     "받는분주소(전체,분할)": {
         "coupang": ["주소", "수취인주소", "배송지주소", "도로명주소", "받는분주소", "주소(전체,분할)"],
@@ -152,10 +177,12 @@ CANDIDATES = {
             "수취인기본주소", "수취인상세주소", "기본주소", "상세주소",
             "도로명주소", "지번주소"
         ],
+        "gmarket": ["주소", "배송지주소", "수취인주소", "도로명주소", "지번주소"],
     },
     "배송메세지1": {
         "coupang": ["배송메시지", "배송메세지", "요청사항", "배송요청사항", "message"],
         "smartstore": ["배송메시지", "배송메세지", "배송 요청사항", "배송요청사항", "배송메모", "요청사항"],
+        "gmarket": ["배송시 요구사항", "배송요청사항", "배송메시지", "배송메세지", "요청사항"],
     },
 }
 
@@ -163,7 +190,11 @@ def build_mapping(df: pd.DataFrame, platform: str):
     mapping = {}
     for invoice_col, p_dict in CANDIDATES.items():
         if platform == "unknown":
-            col = find_col(df, p_dict["smartstore"]) or find_col(df, p_dict["coupang"])
+            col = (
+                find_col(df, p_dict["smartstore"])
+                or find_col(df, p_dict["coupang"])
+                or find_col(df, p_dict["gmarket"])
+            )
         else:
             col = find_col(df, p_dict[platform])
         mapping[invoice_col] = col
@@ -212,6 +243,57 @@ def build_coupang_item_name(order_df: pd.DataFrame) -> pd.Series:
         return clean_series(order_df.iloc[:, 12])
 
     return pd.Series([""] * len(order_df))
+
+# -------------------------
+# ✅ gmarket(지마켓) 품목명: 상품명 + 옵션/추가구성/사은품/덤
+# -------------------------
+def join_nonempty_unique(values: list[str], sep: str = " / ") -> str:
+    out = []
+    seen = set()
+    for v in values:
+        v = (v or "").strip()
+        if not v:
+            continue
+        if v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+    return sep.join(out)
+
+def build_gmarket_item_name(order_df: pd.DataFrame) -> pd.Series:
+    product_col = find_col(order_df, ["상품명", "주문상품명", "상품명(옵션포함)"])
+    product = clean_series(order_df[product_col]) if product_col is not None else pd.Series([""] * len(order_df))
+
+    option_cols = [
+        find_col(order_df, ["옵션"]),
+        find_col(order_df, ["추가구성"]),
+        find_col(order_df, ["사은품"]),
+        find_col(order_df, ["덤"]),
+    ]
+
+    parts = [product]
+    for c in option_cols:
+        if c is not None:
+            parts.append(clean_series(order_df[c]))
+
+    if not parts:
+        return pd.Series([""] * len(order_df))
+
+    parts_df = pd.concat(parts, axis=1)
+    return parts_df.apply(lambda row: join_nonempty_unique(row.tolist()), axis=1)
+
+def build_gmarket_phone(order_df: pd.DataFrame) -> pd.Series:
+    mobile_col = find_col(order_df, ["수령인 휴대폰", "수령인휴대폰", "수령인 연락처", "휴대폰"])
+    land_col = find_col(order_df, ["수령인 전화번호", "수령인전화번호", "전화번호"])
+
+    mobile = clean_series(order_df[mobile_col]) if mobile_col is not None else pd.Series([""] * len(order_df))
+    land = clean_series(order_df[land_col]) if land_col is not None else pd.Series([""] * len(order_df))
+
+    if mobile_col is None:
+        return land
+    if land_col is None:
+        return mobile
+    return mobile.where(mobile != "", land)
 
 # -------------------------
 # 스마트스토어 받는사람 보강(전화/우편/주소)
@@ -268,6 +350,8 @@ def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mappi
             out["품목명"] = build_smartstore_item_name(order_df)
         elif platform == "coupang":
             out["품목명"] = build_coupang_item_name(order_df)
+        elif platform == "gmarket":
+            out["품목명"] = build_gmarket_item_name(order_df)
 
     # ✅ 스마트스토어 받는사람 정보 강제 세팅(분리 컬럼 조합 포함)
     if platform == "smartstore":
@@ -277,6 +361,10 @@ def make_invoice_rows(template_columns: list[str], order_df: pd.DataFrame, mappi
             out["받는분우편번호"] = build_smartstore_zip(order_df)
         if "받는분주소(전체,분할)" in out.columns:
             out["받는분주소(전체,분할)"] = build_smartstore_address(order_df)
+
+    if platform == "gmarket":
+        if "받는분전화번호" in out.columns:
+            out["받는분전화번호"] = build_gmarket_phone(order_df)
 
     return out
 
@@ -322,9 +410,15 @@ if uploaded_files:
             all_out_rows.append(out_rows)
 
             ok_cnt = sum(1 for v in mapping.values() if v is not None)
+            platform_label = {
+                "coupang": "쿠팡",
+                "smartstore": "스마트스토어",
+                "gmarket": "지마켓",
+                "unknown": "알수없음",
+            }
             report_rows.append({
                 "파일명": uf.name,
-                "자동판별 플랫폼": "쿠팡" if platform == "coupang" else ("스마트스토어" if platform == "smartstore" else "알수없음"),
+                "자동판별 플랫폼": platform_label.get(platform, "알수없음"),
                 "매핑 성공(참고)": f"{ok_cnt}/{len(mapping)}",
                 "행(주문) 수": len(order_df),
             })
