@@ -615,7 +615,7 @@ if uploaded_files:
                 merged_out[품목코드_col]
                 .astype(str)
                 .str.strip()
-                .replace(["nan", "None", ""], None)
+                .replace(["nan", "None", "", "-"], None)
                 .notna()
             )
             df_합배 = merged_out[has_code_mask].reset_index(drop=True)
