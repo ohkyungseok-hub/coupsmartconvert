@@ -624,12 +624,14 @@ if uploaded_files:
             df_합배 = pd.DataFrame(columns=merged_out.columns)
             df_단품 = merged_out.copy()
 
-        # 주소 오름차순 정렬
+        # 주소 오름차순 → 같은 주소 내 품목코드 오름차순 정렬
         addr_col = "받는분주소(전체,분할)"
-        if addr_col in df_합배.columns:
-            df_합배 = df_합배.sort_values(addr_col, na_position="last").reset_index(drop=True)
-        if addr_col in df_단품.columns:
-            df_단품 = df_단품.sort_values(addr_col, na_position="last").reset_index(drop=True)
+        code_col = "품목코드"
+        for df_ in [df_합배, df_단품]:
+            sort_keys = [c for c in [addr_col, code_col] if c in df_.columns]
+            if sort_keys:
+                df_.sort_values(sort_keys, na_position="last", inplace=True)
+                df_.reset_index(drop=True, inplace=True)
 
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
