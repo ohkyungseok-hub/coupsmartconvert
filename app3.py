@@ -203,6 +203,12 @@ CANDIDATES = {
         "gmarket": ["주문번호", "장바구니번호(결제번호)", "결제번호", "주문관리번호"],
         "thirtymall": ["주문번호", "고객주문번호", "order no", "orderno"],
     },
+    "품목코드": {
+        "coupang": ["상품관리코드", "품목코드", "상품코드", "SKU", "sku"],
+        "smartstore": ["상품관리코드", "품목코드", "상품코드", "SKU", "sku"],
+        "gmarket": ["상품관리코드", "판매자 관리코드", "판매자 상세관리코드", "상품번호", "SKU번호"],
+        "thirtymall": ["상품관리코드", "품목코드", "상품코드", "SKU", "sku"],
+    },
     "품목명": {
         "coupang": ["노출상품명(옵션명)", "노출상품명", "등록상품명", "상품명"],
         "smartstore": ["상품명", "주문상품명", "옵션정보", "상품명(옵션포함)", "상품명/옵션"],
@@ -424,7 +430,7 @@ def build_gmarket_pickup_date(order_df: pd.DataFrame) -> pd.Series:
     return deadline.where(deadline != "", planned)
 
 def build_gmarket_item_code(order_df: pd.DataFrame) -> pd.Series:
-    col = find_col(order_df, ["상품번호", "판매자 관리코드", "판매자 상세관리코드", "SKU번호", "SKU번호 및 수량"])
+    col = find_col(order_df, ["상품관리코드", "상품번호", "판매자 관리코드", "판매자 상세관리코드", "SKU번호", "SKU번호 및 수량"])
     if col is None:
         return pd.Series([""] * len(order_df))
     return clean_series(order_df[col])
