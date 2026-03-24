@@ -602,21 +602,60 @@ if uploaded_files:
         st.subheader("📌 파일별 자동 판별/변환 요약")
         st.dataframe(pd.DataFrame(report_rows), use_container_width=True)
 
+        # 상품관리코드(품목코드) 유무로 합배 / 단품 분리
+        품목코드_col = "품목코드"
+        if 품목코드_col in merged_out.columns:
+            has_code_mask = (
+                merged_out[품목코드_col]
+                .astype(str)
+                .str.strip()
+                .replace(["nan", "None", ""], None)
+                .notna()
+            )
+            df_합배 = merged_out[has_code_mask].reset_index(drop=True)
+            df_단품 = merged_out[~has_code_mask].reset_index(drop=True)
+        else:
+            df_합배 = pd.DataFrame(columns=merged_out.columns)
+            df_단품 = merged_out.copy()
+
+        # 주소 오름차순 정렬
+        addr_col = "받는분주소(전체,분할)"
+        if addr_col in df_합배.columns:
+            df_합배 = df_합배.sort_values(addr_col, na_position="last").reset_index(drop=True)
+        if addr_col in df_단품.columns:
+            df_단품 = df_단품.sort_values(addr_col, na_position="last").reset_index(drop=True)
+
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"통합_송장파일_{now_str}.xlsx"
 
-        buffer = BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            merged_out.to_excel(writer, index=False)
-        buffer.seek(0)
-
-        st.success(f"✅ 통합 송장파일 생성 완료! (총 {len(merged_out)}행)")
-        st.download_button(
-            "📥 통합 송장파일 다운로드",
-            data=buffer.getvalue(),
-            file_name=output_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        st.success(
+            f"✅ 변환 완료! 총 {len(merged_out)}행  |  합배: {len(df_합배)}행  |  단품: {len(df_단품)}행"
         )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            buf_합배 = BytesIO()
+            with pd.ExcelWriter(buf_합배, engine="openpyxl") as writer:
+                df_합배.to_excel(writer, index=False)
+            buf_합배.seek(0)
+            st.download_button(
+                f"📥 합배 송장파일 다운로드 ({len(df_합배)}행)",
+                data=buf_합배.getvalue(),
+                file_name=f"합배_송장파일_{now_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        with col2:
+            buf_단품 = BytesIO()
+            with pd.ExcelWriter(buf_단품, engine="openpyxl") as writer:
+                df_단품.to_excel(writer, index=False)
+            buf_단품.seek(0)
+            st.download_button(
+                f"📥 단품 송장파일 다운로드 ({len(df_단품)}행)",
+                data=buf_단품.getvalue(),
+                file_name=f"단품_송장파일_{now_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     except Exception as e:
         st.error(f"❌ 오류 발생: {e}")
