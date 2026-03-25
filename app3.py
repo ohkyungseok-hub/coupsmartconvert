@@ -445,6 +445,9 @@ def build_gmarket_tracking_no(order_df: pd.DataFrame) -> pd.Series:
 # ✅ thirtymall(떠리몰) 주문번호: H열(8번째 컬럼) 강제
 # -------------------------
 def build_thirtymall_order_no(order_df: pd.DataFrame) -> pd.Series:
+    col = find_col(order_df, ["주문번호", "고객주문번호", "order no", "orderno"])
+    if col is not None:
+        return clean_series(order_df[col])
     if order_df.shape[1] > 7:
         return clean_series(order_df.iloc[:, 7])
     return pd.Series([""] * len(order_df))
